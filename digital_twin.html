@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Digital Twin - With Sliders & Text Inputs</title>
+    <style>
+        body { margin: 0; font-family: monospace; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            z-index: 100;
+            display:block;
+            color: white;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0,0,0,0.6);
+            padding: 15px;
+            border-radius: 10px;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            width: 350px; /* Increased width for new inputs */
+        }
+        .slider-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px; /* Add gap between elements */
+        }
+        .slider-container label {
+            flex-shrink: 0; /* Prevent label from shrinking */
+        }
+        .slider-container input[type="range"] {
+            flex-grow: 1;
+        }
+        /* New styles for the number input */
+        .slider-container input[type="number"] {
+            width: 60px;
+            background-color: #333;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 4px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Connecting to WebSocket...</div>
+
+    <!-- Updated HTML for the controls with number inputs -->
+    <div id="controls">
+        <div class="slider-container">
+            <label for="offsetX">X-Offset:</label>
+            <input type="range" id="offsetXSlider" min="-180" max="180" value="0">
+            <input type="number" id="offsetXInput" min="-180" max="180" value="0">
+        </div>
+        <div class="slider-container">
+            <label for="offsetY">Y-Offset:</label>
+            <input type="range" id="offsetYSlider" min="-180" max="180" value="0">
+            <input type="number" id="offsetYInput" min="-180" max="180" value="0">
+        </div>
+        <div class="slider-container">
+            <label for="offsetZ">Z-Offset:</label>
+            <input type="range" id="offsetZSlider" min="-180" max="180" value="0">
+            <input type="number" id="offsetZInput" min="-180" max="180" value="0">
+        </div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        // Import necessary components from Three.js
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        // --- GLOBAL VARIABLES ---
+        let phoneModel; // This will be the INNER pivot for live data
+        let offsetGroup; // This will be the OUTER pivot for manual offsets
+        let latestData = null;
+        const infoDiv = document.getElementById('info');
+
+        // --- SLIDER & INPUT CONTROL VARIABLES ---
+        let offsetX = 0, offsetY = 0, offsetZ = 0;
+        const offsetXSlider = document.getElementById('offsetXSlider');
+        const offsetYSlider = document.getElementById('offsetYSlider');
+        const offsetZSlider = document.getElementById('offsetZSlider');
+        const offsetXInput = document.getElementById('offsetXInput');
+        const offsetYInput = document.getElementById('offsetYInput');
+        const offsetZInput = document.getElementById('offsetZInput');
+
+        // --- TWO-WAY BINDING FOR CONTROLS ---
+        function setupControls(slider, input, callback) {
+            slider.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                input.value = value;
+                callback(value);
+            });
+            input.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                slider.value = value;
+                callback(value);
+            });
+        }
+        setupControls(offsetXSlider, offsetXInput, (val) => offsetX = val);
+        setupControls(offsetYSlider, offsetYInput, (val) => offsetY = val);
+        setupControls(offsetZSlider, offsetZInput, (val) => offsetZ = val);
+
+        // --- WEBSOCKET SETUP ---
+        const socket = new WebSocket('wss://' + window.location.hostname + ':8081');
+        socket.onopen = () => { infoDiv.innerHTML = "Connection open. Waiting for data from phone..."; };
+        socket.onmessage = (event) => { latestData = JSON.parse(event.data); };
+        socket.onerror = () => { infoDiv.innerHTML = "WebSocket connection error."; };
+        socket.onclose = () => { infoDiv.innerHTML = "WebSocket connection closed."; };
+
+        // --- SCENE SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x222222);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 5;
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // --- LIGHTING ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        directionalLight.position.set(5, 10, 7.5);
+        scene.add(directionalLight);
+
+        // --- MODEL LOADER ---
+        const loader = new GLTFLoader();
+        loader.load('models/samsung_phone.glb', (gltf) => {
+            const loadedModel = gltf.scene;
+            const box = new THREE.Box3().setFromObject(loadedModel);
+            const center = box.getCenter(new THREE.Vector3());
+            loadedModel.position.sub(center);
+            
+            // This group handles the live gyro data
+            phoneModel = new THREE.Group();
+            phoneModel.add(loadedModel);
+
+            // This new parent group handles the manual offset
+            offsetGroup = new THREE.Group();
+            offsetGroup.add(phoneModel);
+            
+            // Add the outer group to the scene
+            scene.add(offsetGroup);
+            console.log('Model loaded and centered successfully!');
+        });
+
+        // --- ANIMATION LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Check if our groups have been created
+            if (phoneModel && offsetGroup) {
+                // 1. Apply live data rotation to the INNER group
+                if (latestData) {
+                    infoDiv.innerHTML = `Live Data: X=${latestData.rot_x}, Y=${latestData.rot_y}, Z=${latestData.rot_z}`;
+                    const baseBeta = latestData.rot_z * (Math.PI / 180);
+                    const baseGamma = latestData.rot_y * (Math.PI / 180);
+                    const baseAlpha = latestData.rot_x * (Math.PI / -180);
+
+                    phoneModel.rotation.order = 'YXZ';
+                    phoneModel.rotation.y = baseGamma;
+                    phoneModel.rotation.x = baseBeta;
+                    phoneModel.rotation.z = baseAlpha;
+                }
+
+                // 2. Apply manual offset rotation to the OUTER group
+                offsetGroup.rotation.order = 'YXZ';
+                offsetGroup.rotation.y = offsetY * (Math.PI / 180);
+                offsetGroup.rotation.x = offsetX * (Math.PI / 180);
+                offsetGroup.rotation.z = offsetZ * (Math.PI / 180);
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // --- RESIZE HANDLER ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
