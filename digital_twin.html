@@ -95,6 +95,8 @@
         let offsetGroup; // This will be the OUTER pivot for manual offsets
         let latestData = null;
         const infoDiv = document.getElementById('info');
+        let smoothedRotX = 0, smoothedRotY = 0, smoothedRotZ = 0;
+        const smoothingFactor = 0.02; // Lower value = smoother, but more lag
 
         // --- SLIDER & INPUT CONTROL VARIABLES ---
         let offsetX = 0, offsetY = 0, offsetZ = 0;
@@ -139,6 +141,11 @@
         document.body.appendChild(renderer.domElement);
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
+        controls.enableZoom = false; // Disable zooming
+        controls.enablePan = false; // Disable panning
+        controls.enableRotate = false; // Disable rotating
+        camera.zoom = 30;
+        camera.updateProjectionMatrix();
 
         // --- LIGHTING ---
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
@@ -154,7 +161,7 @@
             const box = new THREE.Box3().setFromObject(loadedModel);
             const center = box.getCenter(new THREE.Vector3());
             loadedModel.position.sub(center);
-            
+
             // This group handles the live gyro data
             phoneModel = new THREE.Group();
             phoneModel.add(loadedModel);
@@ -162,7 +169,7 @@
             // This new parent group handles the manual offset
             offsetGroup = new THREE.Group();
             offsetGroup.add(phoneModel);
-            
+
             // Add the outer group to the scene
             scene.add(offsetGroup);
             console.log('Model loaded and centered successfully!');
@@ -177,9 +184,15 @@
                 // 1. Apply live data rotation to the INNER group
                 if (latestData) {
                     infoDiv.innerHTML = `Live Data: X=${latestData.rot_x}, Y=${latestData.rot_y}, Z=${latestData.rot_z}`;
-                    const baseBeta = latestData.rot_z * (Math.PI / 180);
-                    const baseGamma = latestData.rot_y * (Math.PI / 180);
-                    const baseAlpha = latestData.rot_x * (Math.PI / -180);
+
+                    // Apply smoothing
+                    smoothedRotX += (latestData.rot_x - smoothedRotX) * smoothingFactor;
+                    smoothedRotY += (latestData.rot_y - smoothedRotY) * smoothingFactor;
+                    smoothedRotZ += (latestData.rot_z - smoothedRotZ) * smoothingFactor;
+
+                    const baseBeta = smoothedRotZ * (Math.PI / 180);
+                    const baseGamma = smoothedRotY * (Math.PI / 180);
+                    const baseAlpha = smoothedRotX * (Math.PI / -180);
 
                     phoneModel.rotation.order = 'YXZ';
                     phoneModel.rotation.y = baseGamma;
